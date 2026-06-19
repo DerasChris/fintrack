@@ -334,6 +334,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
           backgroundColor: count > 0 ? AppColors.primary : AppColors.surfaceHigh,
         ),
       );
+
+      final syncInfo = provider.lastSyncInfo;
+      if (syncInfo != null && syncInfo.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(syncInfo),
+            backgroundColor: AppColors.surfaceHigh,
+          ),
+        );
+      }
     }
   }
 
