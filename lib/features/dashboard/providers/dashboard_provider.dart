@@ -120,21 +120,31 @@ class DashboardProvider extends ChangeNotifier {
     _lastSyncInfo = null;
     notifyListeners();
 
+    int found = 0;
     try {
       final newTx = await _smsRepo.scanInbox();
-      final synced = await _syncUnsyncedCurrentMonth();
-      _lastSyncInfo = synced > 0
-          ? 'Sincronizados $synced movimientos a la API'
-          : 'Sin movimientos pendientes por sincronizar';
-      await _loadData();
-      return newTx.length;
+      found = newTx.length;
     } catch (e) {
-      _error = 'Error al escanear SMS: ${e.toString()}';
-      return 0;
-    } finally {
+      _error = 'Error al leer SMS: ${e.toString()}';
       _isScanning = false;
       notifyListeners();
+      return 0;
     }
+
+    // Sync es opcional — si falla por red no bloquea el resultado del scan
+    try {
+      final synced = await _syncUnsyncedCurrentMonth();
+      _lastSyncInfo = synced > 0
+          ? 'Sincronizados $synced movimiento(s) a la API'
+          : null;
+    } catch (e) {
+      _lastSyncInfo = 'Sin conexión — los movimientos se sincronizarán después';
+    }
+
+    await _loadData();
+    _isScanning = false;
+    notifyListeners();
+    return found;
   }
 
   Future<int> _syncUnsyncedCurrentMonth() async {
@@ -203,7 +213,10 @@ class DashboardProvider extends ChangeNotifier {
       debugPrint('[SYNC] resultado final: $_lastSyncInfo');
       return _lastSyncInfo!;
     } catch (e) {
-      _lastSyncInfo = 'Error: ${e.toString()}';
+      final msg = e.toString();
+      _lastSyncInfo = msg.contains('Failed host lookup') || msg.contains('SocketException')
+          ? 'Sin conexión a internet — verifica tu red e intenta de nuevo'
+          : 'Error: $msg';
       return _lastSyncInfo!;
     } finally {
       _isSyncing = false;
