@@ -1,9 +1,9 @@
 # 💳 FinTrack SV — Gestor Financiero Personal
 
-Aplicación Flutter 100% local y offline para leer SMS bancarios salvadoreños,
-categorizar gastos automáticamente y generar reportes mensuales.
+Aplicación Flutter para leer SMS bancarios salvadoreños,
+categorizar gastos automáticamente, generar reportes mensuales y sincronizar movimientos a una API propia.
 
-**Sin backend. Sin cloud. Sin costo operativo. Sin LLM.**
+**Parser local (sin IA) + sincronización opcional a tu backend.**
 
 ---
 

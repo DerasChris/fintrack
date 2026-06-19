@@ -8,6 +8,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'core/theme/app_theme.dart';
 import 'data/repositories/transaction_repository.dart';
 import 'data/repositories/sms_repository.dart';
+import 'data/repositories/api_sync_repository.dart';
 import 'features/dashboard/providers/dashboard_provider.dart';
 import 'features/dashboard/screens/dashboard_screen.dart';
 import 'features/transactions/screens/transactions_screen.dart';
@@ -47,11 +48,12 @@ class FinTrackApp extends StatelessWidget {
     // Repositorios singleton
     final txRepo = TransactionRepository();
     final smsRepo = SmsRepository(txRepo);
+    final apiRepo = ApiSyncRepository();
 
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(
-          create: (_) => DashboardProvider(txRepo: txRepo, smsRepo: smsRepo),
+          create: (_) => DashboardProvider(txRepo: txRepo, smsRepo: smsRepo, apiRepo: apiRepo),
         ),
       ],
       child: MaterialApp(

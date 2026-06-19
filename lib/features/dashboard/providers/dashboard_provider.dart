@@ -5,16 +5,20 @@ import '../../../data/models/transaction.dart';
 import '../../../data/models/subscription.dart';
 import '../../../data/repositories/transaction_repository.dart';
 import '../../../data/repositories/sms_repository.dart';
+import '../../../data/repositories/api_sync_repository.dart';
 
 class DashboardProvider extends ChangeNotifier {
   final TransactionRepository _txRepo;
   final SmsRepository _smsRepo;
+  final ApiSyncRepository _apiRepo;
 
   DashboardProvider({
     required TransactionRepository txRepo,
     required SmsRepository smsRepo,
+    required ApiSyncRepository apiRepo,
   })  : _txRepo = txRepo,
-        _smsRepo = smsRepo;
+        _smsRepo = smsRepo,
+        _apiRepo = apiRepo;
 
   // ─── Estado ───
   List<Transaction> _recentTransactions = [];
@@ -26,6 +30,7 @@ class DashboardProvider extends ChangeNotifier {
   bool _isLoading = false;
   bool _isScanning = false;
   String? _error;
+  String? _lastSyncInfo;
   bool _hasPermission = false;
   bool _isPermPermanentlyDenied = false;
 
@@ -40,6 +45,7 @@ class DashboardProvider extends ChangeNotifier {
   bool   get isLoading   => _isLoading;
   bool   get isScanning  => _isScanning;
   String? get error      => _error;
+  String? get lastSyncInfo => _lastSyncInfo;
   bool   get hasPermission => _hasPermission;
   bool   get isPermPermanentlyDenied => _isPermPermanentlyDenied;
   DateTime get selectedMonth => _selectedMonth;
@@ -58,6 +64,7 @@ class DashboardProvider extends ChangeNotifier {
       if (_hasPermission) {
         try {
           await _smsRepo.scanInbox();
+          await _syncUnsyncedCurrentMonth();
         } catch (_) {}
       }
       await _loadData();
@@ -107,10 +114,15 @@ class DashboardProvider extends ChangeNotifier {
   Future<int> scanSms() async {
     _isScanning = true;
     _error = null;
+    _lastSyncInfo = null;
     notifyListeners();
 
     try {
       final newTx = await _smsRepo.scanInbox();
+      final synced = await _syncUnsyncedCurrentMonth();
+      _lastSyncInfo = synced > 0
+          ? 'Sincronizados $synced movimientos a la API'
+          : 'Sin movimientos pendientes por sincronizar';
       await _loadData();
       return newTx.length;
     } catch (e) {
@@ -120,6 +132,32 @@ class DashboardProvider extends ChangeNotifier {
       _isScanning = false;
       notifyListeners();
     }
+  }
+
+  Future<int> _syncUnsyncedCurrentMonth() async {
+    final hasConfig = await _apiRepo.hasConfig();
+    if (!hasConfig) {
+      _lastSyncInfo = 'Configura la API en Ajustes para sincronizar';
+      return 0;
+    }
+
+    final now = DateTime.now();
+    final unsynced = await _txRepo.getUnsyncedTransactionsByMonth(now.year, now.month);
+    if (unsynced.isEmpty) return 0;
+
+    var syncedCount = 0;
+    for (final tx in unsynced) {
+      try {
+        final ok = await _apiRepo.sendTransaction(tx);
+        if (!ok) continue;
+        await _txRepo.markTransactionAsSynced(tx.id);
+        syncedCount++;
+      } catch (_) {
+        // Si falla la API, se mantiene pendiente para reintento.
+      }
+    }
+
+    return syncedCount;
   }
 
   /// Cambiar mes visualizado

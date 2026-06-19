@@ -57,10 +57,16 @@ class SmsRepository {
         (b.date ?? DateTime(0)).compareTo(a.date ?? DateTime(0)));
 
     final List<Transaction> results = [];
+    final now = DateTime.now();
 
     for (final sms in smsList) {
       final body = sms.body;
       if (body == null || body.isEmpty) continue;
+
+      final smsDate = sms.date;
+      if (smsDate == null || smsDate.year != now.year || smsDate.month != now.month) {
+        continue;
+      }
 
       // Verificar que parezca bancario antes de parsear
       if (!_looksLikeBankSms(body)) continue;

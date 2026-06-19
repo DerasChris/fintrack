@@ -7,7 +7,7 @@ import '../models/subscription.dart';
 
 class TransactionRepository {
   static const _dbName = 'fintrack_sv.db';
-  static const _dbVersion = 1;
+  static const _dbVersion = 2;
 
   static Database? _db;
 
@@ -24,6 +24,7 @@ class TransactionRepository {
       path,
       version: _dbVersion,
       onCreate: _createTables,
+      onUpgrade: _upgradeTables,
     );
   }
 
@@ -65,6 +66,24 @@ class TransactionRepository {
         processed_at TEXT DEFAULT CURRENT_TIMESTAMP
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE synced_transactions (
+        transaction_id TEXT PRIMARY KEY,
+        synced_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    ''');
+  }
+
+  Future<void> _upgradeTables(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS synced_transactions (
+          transaction_id TEXT PRIMARY KEY,
+          synced_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+      ''');
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -169,6 +188,35 @@ class TransactionRepository {
       limit: limit,
     );
     return maps.map(Transaction.fromMap).toList();
+  }
+
+  /// Transacciones del mes que aun no se han sincronizado al API.
+  Future<List<Transaction>> getUnsyncedTransactionsByMonth(int year, int month) async {
+    final db = await database;
+    final start = DateTime(year, month, 1).toIso8601String();
+    final end = DateTime(year, month + 1, 1).toIso8601String();
+
+    final maps = await db.rawQuery(
+      '''
+      SELECT t.*
+      FROM transactions t
+      LEFT JOIN synced_transactions s ON s.transaction_id = t.id
+      WHERE t.date >= ? AND t.date < ? AND s.transaction_id IS NULL
+      ORDER BY t.date DESC
+      ''',
+      [start, end],
+    );
+
+    return maps.map(Transaction.fromMap).toList();
+  }
+
+  Future<void> markTransactionAsSynced(String transactionId) async {
+    final db = await database;
+    await db.insert(
+      'synced_transactions',
+      {'transaction_id': transactionId},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   // ─────────────────────────────────────────────────────────────
