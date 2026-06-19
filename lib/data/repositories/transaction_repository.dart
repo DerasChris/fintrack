@@ -219,6 +219,32 @@ class TransactionRepository {
     );
   }
 
+  Future<List<String>> getSyncedTransactionIdsByMonth(int year, int month) async {
+    final db = await database;
+    final start = DateTime(year, month, 1).toIso8601String();
+    final end = DateTime(year, month + 1, 1).toIso8601String();
+    final maps = await db.rawQuery(
+      '''
+      SELECT s.transaction_id
+      FROM synced_transactions s
+      JOIN transactions t ON t.id = s.transaction_id
+      WHERE t.date >= ? AND t.date < ?
+      ''',
+      [start, end],
+    );
+    return maps.map((m) => m['transaction_id'] as String).toList();
+  }
+
+  Future<void> unmarkTransactionsAsSynced(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final id in ids) {
+      batch.delete('synced_transactions', where: 'transaction_id = ?', whereArgs: [id]);
+    }
+    await batch.commit(noResult: true);
+  }
+
   // ─────────────────────────────────────────────────────────────
   // CONTROL DE DUPLICADOS (hash del SMS raw)
   // ─────────────────────────────────────────────────────────────

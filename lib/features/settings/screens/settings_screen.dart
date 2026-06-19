@@ -2,11 +2,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/subscription.dart';
 import '../../../data/models/transaction.dart' hide Category;
 import '../../../data/repositories/api_sync_repository.dart';
 import '../../../data/repositories/transaction_repository.dart';
+import '../../dashboard/providers/dashboard_provider.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -20,21 +22,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _apiRepo = ApiSyncRepository();
   final _baseUrlCtrl = TextEditingController();
   final _endpointCtrl = TextEditingController();
+  final _userIdCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
   List<Subscription> _subscriptions = [];
   bool _savingApiConfig = false;
+  bool _loggingIn = false;
+  bool _isLoggedIn = false;
 
   @override
   void initState() {
     super.initState();
     _loadSubscriptions();
     _loadApiConfig();
+    _checkLoginState();
   }
 
   @override
   void dispose() {
     _baseUrlCtrl.dispose();
     _endpointCtrl.dispose();
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
+    _userIdCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkLoginState() async {
+    final loggedIn = await _apiRepo.auth.isLoggedIn();
+    if (mounted) setState(() => _isLoggedIn = loggedIn);
   }
 
   Future<void> _loadSubscriptions() async {
@@ -45,7 +61,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadApiConfig() async {
     final config = await _apiRepo.loadConfig();
     _baseUrlCtrl.text = config['baseUrl'] ?? '';
-    _endpointCtrl.text = config['endpointPath'] ?? '/api/movimientos';
+    _endpointCtrl.text = config['endpointPath'] ?? '';
+    _userIdCtrl.text = config['userId'] == '0' ? '' : (config['userId'] ?? '');
     if (mounted) setState(() {});
   }
 
@@ -64,6 +81,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _emptyCard('No se han detectado suscripciones aún.\nSe detectan automáticamente al leer los SMS.')
           else
             ..._subscriptions.map((sub) => _subscriptionCard(sub)),
+
+          const SizedBox(height: 24),
+
+          // Login
+          _sectionTitle('Sesión web'),
+          const SizedBox(height: 8),
+          _loginCard(),
 
           const SizedBox(height: 24),
 
@@ -239,7 +263,98 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _loginCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _isLoggedIn ? AppColors.primary.withValues(alpha: 0.4) : AppColors.border,
+        ),
+      ),
+      child: _isLoggedIn
+          ? Row(
+              children: [
+                const Icon(Icons.check_circle_outline, color: AppColors.primary, size: 20),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('Sesión activa', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600)),
+                ),
+                TextButton(
+                  onPressed: _logout,
+                  child: const Text('Cerrar sesión', style: TextStyle(color: AppColors.expense, fontSize: 12)),
+                ),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Inicia sesión para que la app pueda enviar datos a tu API.',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _emailCtrl,
+                  keyboardType: TextInputType.emailAddress,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: const InputDecoration(labelText: 'Correo electrónico'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _passwordCtrl,
+                  obscureText: true,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: const InputDecoration(labelText: 'Contraseña'),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _loggingIn ? null : _doLogin,
+                    icon: _loggingIn
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.login_outlined),
+                    label: Text(_loggingIn ? 'Iniciando sesión...' : 'Iniciar sesión'),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Future<void> _doLogin() async {
+    final email = _emailCtrl.text.trim();
+    final password = _passwordCtrl.text;
+    if (email.isEmpty || password.isEmpty) return;
+
+    setState(() => _loggingIn = true);
+    final ok = await _apiRepo.auth.login(email, password);
+    if (!mounted) return;
+    setState(() {
+      _loggingIn = false;
+      _isLoggedIn = ok;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok ? 'Sesión iniciada correctamente' : 'Credenciales incorrectas'),
+      backgroundColor: ok ? AppColors.primary : AppColors.expense,
+    ));
+    if (ok) {
+      _emailCtrl.clear();
+      _passwordCtrl.clear();
+    }
+  }
+
+  Future<void> _logout() async {
+    await _apiRepo.auth.logout();
+    if (mounted) setState(() => _isLoggedIn = false);
+  }
+
   Widget _apiConfigCard() {
+    final provider = context.watch<DashboardProvider>();
+    final isBusy = _savingApiConfig || provider.isSyncing;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -251,7 +366,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Se envian solo movimientos del mes actual y solo pendientes.',
+            'Se envían solo movimientos del mes actual pendientes de sincronizar.',
             style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
           ),
           const SizedBox(height: 12),
@@ -269,25 +384,140 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: const TextStyle(color: AppColors.textPrimary),
             decoration: const InputDecoration(
               labelText: 'Path endpoint',
-              hintText: '/api/movimientos',
+              hintText: '/api/finanzas-personales/movimiento/flutter/crear',
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _userIdCtrl,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: AppColors.textPrimary),
+            decoration: const InputDecoration(
+              labelText: 'Tu User ID (requerido)',
+              hintText: '1',
             ),
           ),
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _savingApiConfig ? null : _saveApiConfig,
+              onPressed: isBusy ? null : _saveApiConfig,
               icon: _savingApiConfig
                   ? const SizedBox(
                       width: 16,
                       height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(Icons.cloud_upload_outlined),
+                  : const Icon(Icons.save_outlined),
               label: Text(_savingApiConfig ? 'Guardando...' : 'Guardar configuración API'),
             ),
           ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: isBusy ? null : () async {
+                    final msg = await context.read<DashboardProvider>().syncNow();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(msg),
+                        backgroundColor: msg.contains('Error') || msg.contains('Falló')
+                            ? AppColors.expense
+                            : AppColors.primary,
+                        duration: const Duration(seconds: 4),
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGlow,
+                    foregroundColor: AppColors.primary,
+                  ),
+                  icon: provider.isSyncing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cloud_sync_outlined, size: 18),
+                  label: Text(provider.isSyncing ? 'Enviando...' : 'Sincronizar ahora'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: isBusy ? null : () => _confirmRevert(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.expense.withValues(alpha: 0.12),
+                    foregroundColor: AppColors.expense,
+                  ),
+                  icon: const Icon(Icons.undo_outlined, size: 18),
+                  label: const Text('Revertir carga'),
+                ),
+              ),
+            ],
+          ),
+          if (provider.lastSyncInfo != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.background,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, size: 14, color: AppColors.textMuted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      provider.lastSyncInfo!,
+                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Future<void> _confirmRevert(BuildContext context) async {
+    final provider = context.read<DashboardProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('Revertir carga', style: TextStyle(color: AppColors.textPrimary)),
+        content: const Text(
+          '¿Eliminar de la API los movimientos del mes actual y marcarlos como no sincronizados?',
+          style: TextStyle(color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Revertir', style: TextStyle(color: AppColors.expense)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+    final msg = await provider.revertCurrentMonthSync();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: msg.contains('Error') ? AppColors.expense : AppColors.warning,
+        duration: const Duration(seconds: 4),
       ),
     );
   }
@@ -343,12 +573,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _saveApiConfig() async {
     final baseUrl = _baseUrlCtrl.text.trim();
     final endpointPath = _endpointCtrl.text.trim();
+    final userId = int.tryParse(_userIdCtrl.text.trim()) ?? 0;
 
-    if (baseUrl.isEmpty) {
+    if (userId <= 0) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Completa Base URL'),
+          content: Text('Ingresa tu User ID (número entero)'),
           backgroundColor: AppColors.warning,
         ),
       );
@@ -357,8 +588,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() => _savingApiConfig = true);
     await _apiRepo.saveConfig(
-      baseUrl: baseUrl,
-      endpointPath: endpointPath,
+      baseUrl: baseUrl.isEmpty ? 'https://daniel.shuttermultimediasv.com' : baseUrl,
+      endpointPath: endpointPath.isEmpty
+          ? '/api/finanzas-personales/movimiento/flutter/crear'
+          : endpointPath,
+      userId: userId,
     );
     if (!mounted) return;
 

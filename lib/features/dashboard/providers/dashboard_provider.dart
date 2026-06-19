@@ -1,6 +1,7 @@
 // lib/features/dashboard/providers/dashboard_provider.dart
 
 import 'package:flutter/foundation.dart' hide Category;
+// ignore: avoid_print
 import '../../../data/models/transaction.dart';
 import '../../../data/models/subscription.dart';
 import '../../../data/repositories/transaction_repository.dart';
@@ -29,6 +30,7 @@ class DashboardProvider extends ChangeNotifier {
 
   bool _isLoading = false;
   bool _isScanning = false;
+  bool _isSyncing = false;
   String? _error;
   String? _lastSyncInfo;
   bool _hasPermission = false;
@@ -48,6 +50,7 @@ class DashboardProvider extends ChangeNotifier {
   String? get lastSyncInfo => _lastSyncInfo;
   bool   get hasPermission => _hasPermission;
   bool   get isPermPermanentlyDenied => _isPermPermanentlyDenied;
+  bool   get isSyncing => _isSyncing;
   DateTime get selectedMonth => _selectedMonth;
 
   // ─────────────────────────────────────────────────────────────
@@ -135,29 +138,106 @@ class DashboardProvider extends ChangeNotifier {
   }
 
   Future<int> _syncUnsyncedCurrentMonth() async {
-    final hasConfig = await _apiRepo.hasConfig();
-    if (!hasConfig) {
-      _lastSyncInfo = 'Configura la API en Ajustes para sincronizar';
-      return 0;
-    }
-
     final now = DateTime.now();
     final unsynced = await _txRepo.getUnsyncedTransactionsByMonth(now.year, now.month);
     if (unsynced.isEmpty) return 0;
 
     var syncedCount = 0;
     for (final tx in unsynced) {
-      try {
-        final ok = await _apiRepo.sendTransaction(tx);
-        if (!ok) continue;
-        await _txRepo.markTransactionAsSynced(tx.id);
-        syncedCount++;
-      } catch (_) {
-        // Si falla la API, se mantiene pendiente para reintento.
-      }
+      final ok = await _apiRepo.sendTransaction(tx);
+      if (!ok) continue;
+      await _txRepo.markTransactionAsSynced(tx.id);
+      syncedCount++;
     }
-
     return syncedCount;
+  }
+
+  /// Sincronización manual con feedback visible
+  Future<String> syncNow() async {
+    _isSyncing = true;
+    _lastSyncInfo = null;
+    notifyListeners();
+
+    try {
+      final userId = await _apiRepo.getUserId();
+      final config = await _apiRepo.loadConfig();
+      debugPrint('[SYNC] userId=$userId config=$config');
+
+      final hasConfig = await _apiRepo.hasConfig();
+      debugPrint('[SYNC] hasConfig=$hasConfig');
+      if (!hasConfig) {
+        _lastSyncInfo = 'Configura tu User ID en Ajustes';
+        return _lastSyncInfo!;
+      }
+
+      final now = DateTime.now();
+      final unsynced = await _txRepo.getUnsyncedTransactionsByMonth(now.year, now.month);
+      debugPrint('[SYNC] unsynced=${unsynced.length} txs');
+      if (unsynced.isEmpty) {
+        _lastSyncInfo = 'No hay movimientos pendientes por sincronizar';
+        return _lastSyncInfo!;
+      }
+
+      var synced = 0;
+      var failed = 0;
+      for (final tx in unsynced) {
+        try {
+          debugPrint('[SYNC] enviando tx=${tx.id} amount=${tx.amount} type=${tx.type}');
+          final ok = await _apiRepo.sendTransaction(tx);
+          debugPrint('[SYNC] resultado tx=${tx.id} ok=$ok');
+          if (ok) {
+            await _txRepo.markTransactionAsSynced(tx.id);
+            synced++;
+          } else {
+            failed++;
+          }
+        } catch (e) {
+          debugPrint('[SYNC] error tx=${tx.id}: $e');
+          failed++;
+        }
+      }
+
+      _lastSyncInfo = synced > 0
+          ? 'Enviados $synced movimiento(s)${failed > 0 ? " · $failed fallaron" : ""}'
+          : 'Falló la sincronización ($failed errores) — revisa la URL';
+      debugPrint('[SYNC] resultado final: $_lastSyncInfo');
+      return _lastSyncInfo!;
+    } catch (e) {
+      _lastSyncInfo = 'Error: ${e.toString()}';
+      return _lastSyncInfo!;
+    } finally {
+      _isSyncing = false;
+      notifyListeners();
+    }
+  }
+
+  /// Revertir carga: elimina de la API y desmarca localmente
+  Future<String> revertCurrentMonthSync() async {
+    _isSyncing = true;
+    notifyListeners();
+
+    try {
+      final now = DateTime.now();
+      final ids = await _txRepo.getSyncedTransactionIdsByMonth(now.year, now.month);
+      if (ids.isEmpty) {
+        _lastSyncInfo = 'No hay movimientos sincronizados este mes';
+        return _lastSyncInfo!;
+      }
+
+      final deleted = await _apiRepo.revertTransactions(ids);
+      await _txRepo.unmarkTransactionsAsSynced(ids);
+
+      _lastSyncInfo = deleted > 0
+          ? 'Revertidos $deleted de ${ids.length} movimiento(s) en la API'
+          : '${ids.length} movimiento(s) desmarcados localmente (API no respondió)';
+      return _lastSyncInfo!;
+    } catch (e) {
+      _lastSyncInfo = 'Error al revertir: ${e.toString()}';
+      return _lastSyncInfo!;
+    } finally {
+      _isSyncing = false;
+      notifyListeners();
+    }
   }
 
   /// Cambiar mes visualizado

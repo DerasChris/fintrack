@@ -58,23 +58,41 @@ class SmsRepository {
 
     final List<Transaction> results = [];
     final now = DateTime.now();
+    // ignore: avoid_print
+    print('[SMS] Total SMS en inbox: ${smsList.length}');
 
     for (final sms in smsList) {
       final body = sms.body;
       if (body == null || body.isEmpty) continue;
 
       final smsDate = sms.date;
+      // ignore: avoid_print
+      print('[SMS] from=${sms.address} date=$smsDate body_preview=${body.replaceAll('\n', '|').substring(0, body.length.clamp(0, 80))}');
+
       if (smsDate == null || smsDate.year != now.year || smsDate.month != now.month) {
+        // ignore: avoid_print
+        print('[SMS] ❌ filtrado por mes (smsDate=$smsDate, now=$now)');
         continue;
       }
 
-      // Verificar que parezca bancario antes de parsear
-      if (!_looksLikeBankSms(body)) continue;
+      if (!_looksLikeBankSms(body)) {
+        // ignore: avoid_print
+        print('[SMS] ❌ no parece bancario');
+        continue;
+      }
 
-      // Evitar duplicados
-      if (await _db.isSmsAlreadyProcessed(body)) continue;
+      // ignore: avoid_print
+      print('[SMS] ✅ bancario detectado, parseando...');
+
+      if (await _db.isSmsAlreadyProcessed(body)) {
+        // ignore: avoid_print
+        print('[SMS] ⚠️ duplicado, ya procesado');
+        continue;
+      }
 
       final transaction = SmsParser.parse(body, receivedAt: sms.date);
+      // ignore: avoid_print
+      print('[SMS] parse resultado: ${transaction == null ? "null (no mapeó)" : "OK amount=${transaction.amount} merchant=${transaction.merchant}"}');
 
       if (transaction != null) {
         await _db.insertTransaction(transaction);
